@@ -1,0 +1,69 @@
+version: '3.8'
+
+services:
+  mongo:
+    image: mongo:5.0
+    container_name: oj-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      - oj-network
+
+  backend:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: oj-backend
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    depends_on:
+      - mongo
+    environment:
+      - SPRING_DATA_MONGODB_URI=mongodb://mongo:27017/online-judge
+    networks:
+      - oj-network
+
+  judge:
+    build:
+      context: ./judge
+      dockerfile: Dockerfile
+    container_name: oj-judge
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    depends_on:
+      - mongo
+      - backend
+    environment:
+      - PORT=8081
+      - MONGO_URI=mongodb://mongo:27017/online-judge
+      - BACK_SERVER_URL=http://backend:8080
+    networks:
+      - oj-network
+
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    container_name: oj-client
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+      - judge
+    stdin_open: true
+    tty: true
+    networks:
+      - oj-network
+
+volumes:
+  mongo-data:
+
+networks:
+  oj-network:
+    driver: bridge
