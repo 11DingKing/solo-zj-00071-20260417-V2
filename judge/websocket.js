@@ -40,7 +40,10 @@ const initWebSocket = (server) => {
     const userId = socket.userId;
     console.log(`User ${userId} connected with socket: ${socket.id}`);
     
-    userConnections.set(userId, socket.id);
+    if (!userConnections.has(userId)) {
+      userConnections.set(userId, new Set());
+    }
+    userConnections.get(userId).add(socket.id);
     
     socket.on("ping", () => {
       socket.emit("pong", { timestamp: Date.now() });
@@ -53,14 +56,18 @@ const initWebSocket = (server) => {
         problemId: problemId,
         createdAt: Date.now(),
       });
-      console.log(`Submission ${submissionId} registered for user ${userId}`);
+      console.log(`Submission ${submissionId} registered for user ${userId} via socket`);
     });
     
     socket.on("disconnect", (reason) => {
-      console.log(`User ${userId} disconnected: ${reason}`);
+      console.log(`User ${userId} disconnected: ${reason}, socket: ${socket.id}`);
       
-      if (userConnections.get(userId) === socket.id) {
-        userConnections.delete(userId);
+      const userSockets = userConnections.get(userId);
+      if (userSockets) {
+        userSockets.delete(socket.id);
+        if (userSockets.size === 0) {
+          userConnections.delete(userId);
+        }
       }
     });
   });
@@ -74,23 +81,29 @@ const pushToUser = (userId, event, data) => {
     return false;
   }
   
-  const socketId = userConnections.get(userId);
-  if (socketId) {
+  const userSockets = userConnections.get(userId);
+  if (!userSockets || userSockets.size === 0) {
+    console.log(`Failed to push ${event}: user ${userId} not connected`);
+    return false;
+  }
+  
+  let pushed = false;
+  userSockets.forEach((socketId) => {
     const socket = io.sockets.sockets.get(socketId);
     if (socket) {
       socket.emit(event, data);
-      console.log(`Pushed ${event} to user ${userId}`);
-      return true;
+      console.log(`Pushed ${event} to user ${userId} via socket ${socketId}`);
+      pushed = true;
     }
-  }
-  console.log(`Failed to push ${event}: user ${userId} not connected`);
-  return false;
+  });
+  
+  return pushed;
 };
 
 const pushJudgeProgress = (submissionId, status, data = {}) => {
   const task = submissionTasks.get(submissionId);
   if (!task) {
-    console.log(`Submission ${submissionId} not found in tasks`);
+    console.log(`Submission ${submissionId} not found in tasks, cannot push progress`);
     return false;
   }
   
@@ -103,10 +116,27 @@ const pushJudgeProgress = (submissionId, status, data = {}) => {
   });
 };
 
+const pushJudgeProgressByUserId = (userId, submissionId, status, data = {}) => {
+  if (!submissionTasks.has(submissionId)) {
+    submissionTasks.set(submissionId, {
+      userId: userId,
+      createdAt: Date.now(),
+    });
+    console.log(`Submission ${submissionId} registered for user ${userId} via API`);
+  }
+  
+  return pushToUser(userId, "judge_progress", {
+    submissionId,
+    status,
+    ...data,
+    timestamp: Date.now(),
+  });
+};
+
 const pushJudgeResult = (submissionId, verdict, result, testcases) => {
   const task = submissionTasks.get(submissionId);
   if (!task) {
-    console.log(`Submission ${submissionId} not found in tasks`);
+    console.log(`Submission ${submissionId} not found in tasks, cannot push result`);
     return false;
   }
   
@@ -126,11 +156,47 @@ const pushJudgeResult = (submissionId, verdict, result, testcases) => {
   return success;
 };
 
+const pushJudgeResultByUserId = (userId, submissionId, verdict, result, testcases) => {
+  if (!submissionTasks.has(submissionId)) {
+    submissionTasks.set(submissionId, {
+      userId: userId,
+      createdAt: Date.now(),
+    });
+    console.log(`Submission ${submissionId} registered for user ${userId} via API`);
+  }
+  
+  const success = pushToUser(userId, "judge_result", {
+    submissionId,
+    verdict,
+    result,
+    testcases,
+    timestamp: Date.now(),
+  });
+  
+  if (success) {
+    submissionTasks.delete(submissionId);
+  }
+  
+  return success;
+};
+
+const registerSubmissionForUser = (userId, submissionId, problemId) => {
+  submissionTasks.set(submissionId, {
+    userId: userId,
+    problemId: problemId,
+    createdAt: Date.now(),
+  });
+  console.log(`Submission ${submissionId} registered for user ${userId}`);
+};
+
 module.exports = {
   initWebSocket,
   pushToUser,
   pushJudgeProgress,
+  pushJudgeProgressByUserId,
   pushJudgeResult,
+  pushJudgeResultByUserId,
+  registerSubmissionForUser,
   submissionTasks,
   userConnections,
 };

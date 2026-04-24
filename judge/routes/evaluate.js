@@ -4,7 +4,11 @@ const router = express.Router();
 const addSubmission = require("../judge");
 const auth = require("../middleware/auth");
 const Submission = require("../models/submission");
-const { pushJudgeProgress, pushJudgeResult, submissionTasks } = require("../websocket");
+const { 
+  pushJudgeProgressByUserId, 
+  pushJudgeResultByUserId, 
+  registerSubmissionForUser 
+} = require("../websocket");
 
 router.post("/", auth, (req, res) => {
   const solution = {
@@ -23,31 +27,22 @@ router.post("/", auth, (req, res) => {
 
   console.log(`New submission: ${submissionId}, user: ${userId}, operation: ${operation}`);
 
-  // 检查是否已注册该提交任务（通过 WebSocket 注册）
-  const task = submissionTasks.get(submissionId);
-  if (task) {
-    console.log(`Submission ${submissionId} already registered for WebSocket push`);
-  } else {
-    // 如果没有注册，尝试从请求中获取并注册
-    console.log(`Submission ${submissionId} not registered, will try to push when ready`);
-  }
+  registerSubmissionForUser(userId.toString(), submissionId, problemId);
 
   axios
     .get(`${process.env.BACK_SERVER_URL}/api/problem/${problemId}`)
     .then((problemResponse) => {
       const problem = problemResponse.data;
       
-      // 进度回调函数 - 通过 WebSocket 推送进度
       const progressCallback = (status, data) => {
-        console.log(`Progress for ${submissionId}: ${status}`);
-        pushJudgeProgress(submissionId, status, data);
+        console.log(`Progress for ${submissionId} (user ${userId}): ${status}`);
+        pushJudgeProgressByUserId(userId.toString(), submissionId, status, data);
       };
 
       addSubmission(problem, submission, operation, (err, result) => {
         if (err) {
           console.log(err);
-          // 推送错误状态
-          pushJudgeProgress(submissionId, "error", { message: err.message });
+          pushJudgeProgressByUserId(userId.toString(), submissionId, "error", { message: err.message });
           return res
             .status(500)
             .json({ message: "Something Went Wrong! Try Again!!!" });
@@ -91,8 +86,8 @@ router.post("/", auth, (req, res) => {
 
         console.log(submission.verdict, finalResult);
 
-        // 通过 WebSocket 推送最终结果
-        const pushSuccess = pushJudgeResult(
+        const pushSuccess = pushJudgeResultByUserId(
+          userId.toString(),
           submissionId,
           submission.verdict,
           finalResult,
@@ -100,7 +95,7 @@ router.post("/", auth, (req, res) => {
         );
 
         if (!pushSuccess) {
-          console.log(`Failed to push result for ${submissionId} via WebSocket, user may be disconnected`);
+          console.log(`Failed to push result for ${submissionId} via WebSocket, user ${userId} may be disconnected`);
         }
 
         return res.send({ 
@@ -113,8 +108,7 @@ router.post("/", auth, (req, res) => {
     })
     .catch((err) => {
       console.error(`Error fetching problem ${problemId}:`, err);
-      // 推送错误状态
-      pushJudgeProgress(submissionId, "error", { message: "Problem Not Found" });
+      pushJudgeProgressByUserId(userId.toString(), submissionId, "error", { message: "Problem Not Found" });
       res.status(404).json({ message: "Problem Not Found." });
     });
 });

@@ -62,6 +62,13 @@ const Problem = (props) => {
     progress: 0,
   });
 
+  const [wsStatus, setWsStatus] = useState({
+    connected: false,
+    reconnecting: false,
+    reconnectAttempt: 0,
+    reconnectFailed: false,
+  });
+
   const languageExtention = {
     C: "c",
     "C++": "cpp",
@@ -186,6 +193,60 @@ const Problem = (props) => {
     }
   }, [currentSubmissionId, problem.name, code, language, languageExtention]);
 
+  const handleWsConnect = useCallback(() => {
+    console.log("WebSocket connected");
+    setWsStatus({
+      connected: true,
+      reconnecting: false,
+      reconnectAttempt: 0,
+      reconnectFailed: false,
+    });
+  }, []);
+
+  const handleWsDisconnect = useCallback((reason) => {
+    console.log("WebSocket disconnected:", reason);
+    setWsStatus(prev => ({
+      ...prev,
+      connected: false,
+    }));
+  }, []);
+
+  const handleWsReconnecting = useCallback((data) => {
+    console.log("WebSocket reconnecting:", data);
+    setWsStatus({
+      connected: false,
+      reconnecting: true,
+      reconnectAttempt: data.attempt,
+      reconnectFailed: false,
+    });
+    toast.info(`正在重连 (${data.attempt}/${data.maxAttempts})...`, {
+      position: "top-right",
+      autoClose: 3000,
+      hideProgressBar: false,
+      closeOnClick: true,
+      pauseOnHover: true,
+      draggable: true,
+    });
+  }, []);
+
+  const handleWsReconnectFailed = useCallback(() => {
+    console.log("WebSocket reconnect failed");
+    setWsStatus({
+      connected: false,
+      reconnecting: false,
+      reconnectAttempt: 0,
+      reconnectFailed: true,
+    });
+    toast.error("连接已断开，请刷新页面", {
+      position: "top-right",
+      autoClose: false,
+      hideProgressBar: false,
+      closeOnClick: true,
+      pauseOnHover: true,
+      draggable: true,
+    });
+  }, []);
+
   useEffect(() => {
     const problemId = props.match.params.id;
 
@@ -213,15 +274,24 @@ const Problem = (props) => {
         });
       });
 
-    webSocketManager.connect();
+    webSocketManager.on("connect", handleWsConnect);
+    webSocketManager.on("disconnect", handleWsDisconnect);
+    webSocketManager.on("reconnecting", handleWsReconnecting);
+    webSocketManager.on("reconnect_failed", handleWsReconnectFailed);
     webSocketManager.on("judge_progress", handleJudgeProgress);
     webSocketManager.on("judge_result", handleJudgeResult);
+    
+    webSocketManager.connect();
 
     return () => {
+      webSocketManager.off("connect", handleWsConnect);
+      webSocketManager.off("disconnect", handleWsDisconnect);
+      webSocketManager.off("reconnecting", handleWsReconnecting);
+      webSocketManager.off("reconnect_failed", handleWsReconnectFailed);
       webSocketManager.off("judge_progress", handleJudgeProgress);
       webSocketManager.off("judge_result", handleJudgeResult);
     };
-  }, [props.match.params.id, handleJudgeProgress, handleJudgeResult]);
+  }, [props.match.params.id, handleWsConnect, handleWsDisconnect, handleWsReconnecting, handleWsReconnectFailed, handleJudgeProgress, handleJudgeResult]);
 
   const handleLanguageSelect = (e) => {
     e.preventDefault();
